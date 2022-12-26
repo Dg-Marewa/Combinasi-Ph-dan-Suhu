@@ -1,0 +1,146 @@
+const int pH_pin = A0;
+float Po = 0;
+float PH_step;
+int nilai_analog_PH;
+double TeganganPh;
+
+//Untuk kalibrasi
+float PH4 = 3.27;
+float PH7 = 2.77;
+
+#include <ESP8266WiFi.h>
+#include <FirebaseArduino.h>
+
+// Set these to run example.
+#define FIREBASE_HOST "testing-8266-3c654-default-rtdb.asia-southeast1.firebasedatabase.app"
+#define FIREBASE_AUTH "8TIVaLnqz5cYW1833NzlCFdxsnDVeThaSYl9X3ha"
+#define WIFI_SSID "PDTI"
+#define WIFI_PASSWORD "pdti1234"
+
+// Suhu Air
+#include <OneWire.h>
+#include <DallasTemperature.h>
+
+#define ONE_WIRE_BUS 2
+OneWire oneWire(ONE_WIRE_BUS);
+DallasTemperature Suhu(&oneWire);
+
+float tAir;
+// Suhu Air
+
+//DO
+#define DO_PIN A0
+ 
+#define VREF 5000    //VREF (mv)
+#define ADC_RES 1024 //ADC Resolution
+ 
+//Single-point calibration Mode=0
+//Two-point calibration Mode=1
+#define TWO_POINT_CALIBRATION 0
+ 
+#define READ_TEMP (27) //Current water temperature ℃, Or temperature sensor function
+ 
+//Single point calibration needs to be filled CAL1_V and CAL1_T
+#define CAL1_V (19995) //mv
+#define CAL1_T (25)   //℃
+//Two-point calibration needs to be filled CAL2_V and CAL2_T
+//CAL1 High temperature point, CAL2 Low temperature point
+#define CAL2_V (1300) //mv
+#define CAL2_T (15)   //℃
+ 
+const uint16_t DO_Table[41] = {
+    14460, 14220, 13820, 13440, 13090, 12740, 12420, 12110, 11810, 11530,
+    11260, 11010, 10770, 10530, 10300, 10080, 9860, 9660, 9460, 9270,
+    9080, 8900, 8730, 8570, 8410, 8250, 8110, 7960, 7820, 7690,
+    7560, 7430, 7300, 7180, 7070, 6950, 6840, 6730, 6630, 6530, 6410};
+ 
+uint8_t Temperaturet;
+uint16_t ADC_Raw;
+uint16_t ADC_Voltage;
+uint16_t DO;
+uint16_t DO_Nilai;
+ 
+int16_t readDO(uint32_t voltage_mv, uint8_t temperature_c)
+{
+#if TWO_POINT_CALIBRATION == 00
+  uint16_t V_saturation = (uint32_t)CAL1_V + (uint32_t)35 * temperature_c - (uint32_t)CAL1_T * 35;
+  return (voltage_mv * DO_Table[temperature_c] / V_saturation);
+#else
+  uint16_t V_saturation = (int16_t)((int8_t)temperature_c - CAL2_T) * ((uint16_t)CAL1_V - CAL2_V) / ((uint8_t)CAL1_T - CAL2_T) + CAL2_V;
+  return (voltage_mv * DO_Table[temperature_c] / V_saturation);
+#endif
+}
+
+
+void setup() {
+  pinMode(pH_pin, INPUT);
+  Serial.begin(9600);
+  Serial.begin(115200);
+  Suhu.begin();
+
+  // connect to wifi.
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  Serial.print("connecting");
+  while (WiFi.status() != WL_CONNECTED) {
+    Serial.print(".");
+    delay(500);
+  }
+  Serial.println();
+  Serial.print("connected: ");
+  Serial.println(WiFi.localIP());
+
+  Firebase.begin(FIREBASE_HOST, FIREBASE_AUTH);
+}
+
+void sensor_ph(){
+  int nilai_analog_PH = analogRead(pH_pin);
+  Serial.print("Nilai ADC Ph : ");
+  Serial.println(nilai_analog_PH);
+  TeganganPh = 3.3 / 1024.0 * nilai_analog_PH;
+  Serial.print("Tegangan Ph: ");
+  Serial.println(TeganganPh, 3);
+
+  PH_step = (PH4 - PH7) / 3;
+  Po = 7.00 + ((PH7 - TeganganPh) / PH_step);
+  Serial.print("Nilai Ph cairan: ");
+  Serial.println(Po, 2);
+}
+
+
+void loop() {
+  
+  sensor_ph();
+  Suhu.requestTemperatures();
+  tAir = Suhu.getTempCByIndex(0);
+  Serial.print("Suhu Air Atas: ");
+  Serial.println(tAir);
+
+  //do
+  Temperaturet = (uint8_t)READ_TEMP;
+  ADC_Raw = analogRead(DO_PIN);
+  ADC_Voltage = uint32_t(VREF) * ADC_Raw / ADC_RES;
+  DO = (readDO(ADC_Voltage, Temperaturet))/1000;
+  DO_Nilai = (readDO(ADC_Voltage, Temperaturet))/1000;
+
+  Serial.print("Temperaturet:\t" + String(Temperaturet) + "\t");
+  Serial.print("ADC RAW:\t" + String(ADC_Raw) + "\t");
+  Serial.print("ADC Voltage:\t" + String(ADC_Voltage) + "\t");
+  //Serial.print("DO:\t" + String((readDO(ADC_Voltage, Temperaturet))/1000) + " mg/L" + "\t");
+
+  Firebase.setFloat("PH/PHAir", Po);
+  Firebase.setFloat("PH/Suhu", tAir);
+  Firebase.setFloat("PH/DO", DO_Nilai);
+  // handle error
+  if (Firebase.failed()) {
+      Serial.print("setting /number failed:");
+      Serial.println(Firebase.error());  
+      return;
+  }
+  
+ 
+  Serial.println("DO:\t" + String((readDO(ADC_Voltage, Temperaturet))/1000) + " mg/L" + "\t");
+
+  
+
+  delay(1000);
+}
